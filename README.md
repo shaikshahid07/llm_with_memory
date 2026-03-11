@@ -4,7 +4,7 @@
 
 ### *Built by **Data Visionaries** Team*
 
-[![GitHub](https://img.shields.io/badge/GitHub-vignesh--DA-blue?logo=github)](https://github.com/vignesh-DA/memorai)
+[![GitHub](https://img.shields.io/badge/GitHub-Shahid-Shaihid-blue?logo=github)](https://github.com/shaikshahid07)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue?logo=python)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.109+-green?logo=fastapi)](https://fastapi.tiangolo.com/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
