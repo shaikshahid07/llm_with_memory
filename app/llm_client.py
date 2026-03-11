@@ -1,0 +1,234 @@
+"""Unified LLM client supporting multiple providers."""
+
+import json
+import asyncio
+from typing import List, Literal, Optional
+
+from openai import OpenAI
+from anthropic import Anthropic
+from groq import Groq
+
+from app.config import get_settings
+
+settings = get_settings()
+
+
+class UnifiedLLMClient:
+    """Unified client for multiple LLM providers."""
+
+    def __init__(self):
+        """Initialize clients based on configuration."""
+        self.provider = settings.llm_provider
+        
+        # Initialize only the selected provider to avoid unnecessary errors
+        self.openai_client = None
+        self.anthropic_client = None
+        self.groq_client = None
+        
+        # Initialize OpenAI client only if selected and key provided
+        if (self.provider == "openai" and settings.openai_api_key and 
+            settings.openai_api_key != "your_openai_api_key_here"):
+            self.openai_client = OpenAI(api_key=settings.openai_api_key)
+
+        # Initialize Anthropic client only if selected and key provided
+        elif (self.provider == "anthropic" and settings.anthropic_api_key and 
+              settings.anthropic_api_key != "your_anthropic_api_key_here"):
+            self.anthropic_client = Anthropic(api_key=settings.anthropic_api_key)
+
+        # Initialize Groq client only if selected and key provided
+        elif (self.provider == "groq" and settings.groq_api_key and 
+              settings.groq_api_key != "your_groq_api_key_here"):
+            self.groq_client = Groq(api_key=settings.groq_api_key)
+        
+        # Fallback: if no valid provider, create a mock client for testing
+        else:
+            print(f"⚠️  No valid API key found for provider '{self.provider}'. Using mock responses.")
+            self.groq_client = None
+            self.provider = "mock"
+
+    def chat_completion(
+        self,
+        messages: List[dict],
+        model: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 1000,
+    ) -> str:
+        """
+        Get chat completion from the configured LLM provider.
+        
+        Args:
+            messages: List of message dicts with 'role' and 'content'
+            model: Optional model override
+            temperature: Sampling temperature
+            max_tokens: Maximum tokens to generate
+            
+        Returns:
+            Generated text response
+        """
+        provider = self.provider
+
+        # OpenAI
+        if provider == "openai":
+            if not self.openai_client:
+                raise ValueError("OpenAI API key not configured")
+            
+            response = self.openai_client.chat.completions.create(
+                model=model or settings.openai_main_model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            return response.choices[0].message.content
+
+        # Anthropic Claude
+        elif provider == "anthropic":
+            if not self.anthropic_client:
+                raise ValueError("Anthropic API key not configured")
+            
+            # Convert messages format for Claude
+            system_message = None
+            claude_messages = []
+            
+            for msg in messages:
+                if msg["role"] == "system":
+                    system_message = msg["content"]
+                else:
+                    claude_messages.append({
+                        "role": msg["role"],
+                        "content": msg["content"]
+                    })
+            
+            response = self.anthropic_client.messages.create(
+                model=model or settings.claude_model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                system=system_message,
+                messages=claude_messages,
+            )
+            return response.content[0].text
+
+        # Groq
+        elif provider == "groq":
+            if not self.groq_client:
+                raise ValueError("Groq API key not configured")
+            
+            response = self.groq_client.chat.completions.create(
+                model=model or settings.groq_model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            return response.choices[0].message.content
+
+        # Mock provider for testing
+        elif provider == "mock":
+            return "This is a mock response. Please configure a valid LLM provider API key."
+
+        else:
+            raise ValueError(f"Unknown LLM provider: {provider}")
+
+    async def generate_completion_async(
+        self,
+        messages: List[dict],
+        model: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 1000,
+    ) -> str:
+        """
+        Async wrapper for chat completion (runs sync methods in thread pool).
+        Supports vision messages with image_url content type.
+        
+        Args:
+            messages: List of message dicts with 'role' and 'content'
+            model: Optional model override
+            temperature: Sampling temperature
+            max_tokens: Maximum tokens to generate
+            
+        Returns:
+            Generated text response
+        """
+        # Run sync method in thread pool to avoid blocking
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: self.chat_completion(messages, model, temperature, max_tokens)
+        )
+
+    def extract_json(
+        self,
+        messages: List[dict],
+        model: Optional[str] = None,
+    ) -> dict:
+        """
+        Extract JSON from LLM response (for structured extraction).
+        
+        Args:
+            messages: List of message dicts
+            model: Optional model override
+            
+        Returns:
+            Parsed JSON object
+        """
+        response = self.chat_completion(
+            messages=messages,
+            model=model,
+            temperature=0.3,  # Lower temperature for structured output
+            max_tokens=2000,
+        )
+        
+        # Try to extract JSON from response
+        try:
+            # Look for JSON in code blocks
+            if "```json" in response:
+                json_str = response.split("```json")[1].split("```")[0].strip()
+            elif "```" in response:
+                json_str = response.split("```")[1].split("```")[0].strip()
+            else:
+                json_str = response.strip()
+            
+            return json.loads(json_str)
+        except (json.JSONDecodeError, IndexError):
+            # If no valid JSON found, return empty structure
+            return {"memories": []}
+
+    def get_embeddings(self, texts: List[str], model: Optional[str] = None) -> List[List[float]]:
+        """
+        Generate embeddings for text (currently OpenAI only).
+        
+        Args:
+            texts: List of texts to embed
+            model: Optional model override
+            
+        Returns:
+            List of embedding vectors
+        """
+        if not self.openai_client:
+            raise ValueError("OpenAI API key required for embeddings")
+        
+        response = self.openai_client.embeddings.create(
+            input=texts,
+            model=model or settings.openai_embedding_model,
+        )
+        
+        return [item.embedding for item in response.data]
+
+
+# Global client instance
+llm_client = None
+
+def get_llm_client() -> UnifiedLLMClient:
+    """Get the global LLM client instance."""
+    global llm_client
+    if llm_client is None:
+        try:
+            llm_client = UnifiedLLMClient()
+            print(f"✅ LLM Client initialized successfully with provider: {llm_client.provider}")
+        except Exception as e:
+            print(f"❌ Failed to initialize LLM client: {e}")
+            # Create a mock client to prevent crashes
+            llm_client = UnifiedLLMClient.__new__(UnifiedLLMClient)
+            llm_client.provider = "mock"
+            llm_client.openai_client = None
+            llm_client.anthropic_client = None
+            llm_client.groq_client = None
+    return llm_client
